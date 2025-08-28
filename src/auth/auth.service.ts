@@ -8,6 +8,7 @@ import {
 import { CreateAuthDto } from './dto/create-auth.dto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import argon from 'argon2';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -19,49 +20,42 @@ export class AuthService {
     private jwt: JwtService,
     private config: ConfigService,
   ) {}
-
   async login(createAuthDto: CreateAuthDto) {
-    try {
-      const user = await this.prisma.user.findUnique({
-        where: { email: createAuthDto.email },
-      });
-      if (!user) {
-        throw new UnauthorizedException('Invalid Credentials');
-      }
-      const isMatch = await argon.verify(user.password, createAuthDto.password);
-      if (!isMatch) {
-        throw new UnauthorizedException('Invalid Credentials');
-      }
-      return await this.signToken(user.id, user.email);
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new InternalServerErrorException();
+    const user = await this.prisma.user.findUnique({
+      where: { email: createAuthDto.email },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
     }
+
+    const isMatch = await argon.verify(user.password, createAuthDto.password);
+    if (!isMatch) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    return this.signToken(user.id, user.email);
   }
 
   async signup(createAuthDto: CreateAuthDto) {
     try {
       const hash = await argon.hash(createAuthDto.password);
-      createAuthDto.password = hash;
       const user = await this.prisma.user.create({
         data: {
           email: createAuthDto.email,
-          password: createAuthDto.password,
+          password: hash,
           name: createAuthDto.name,
         },
       });
       const { password, ...userWithoutPassword } = user;
       return { user: userWithoutPassword };
     } catch (error) {
-      console.log(error);
-      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error instanceof PrismaClientKnownRequestError) {
         if (error.code === 'P2002') {
-          throw new ConflictException('Credentials taken');
+          throw new ConflictException('Email already taken');
         }
       }
-      throw new InternalServerErrorException();
+      throw error;
     }
   }
 
